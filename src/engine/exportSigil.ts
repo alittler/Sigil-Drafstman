@@ -14,13 +14,24 @@ export interface SigilExportOptions {
   size?: number;
 }
 
-function slugifyFilename(input: string): string {
-  const clean = input
+/**
+ * Format a phrase and optional domain seed (e.g. "Ignis Et Terra", "50868228")
+ * into a clean, case-preserving filename stem ("Ignis-Et-Terra-50868228").
+ */
+export function formatExportFilenameStem(input: string, seed?: string | null): string {
+  const cleanBase = input
     .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/\s*#\s*/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-')
+    .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
-  return clean || 'arcane-sigil';
+  const base = cleanBase || 'arcane-sigil';
+  const cleanSeed = seed?.trim().replace(/[^A-Za-z0-9_-]/g, '');
+  if (cleanSeed && !base.endsWith(`-${cleanSeed}`)) {
+    return `${base}-${cleanSeed}`;
+  }
+  return base;
 }
 
 function buildExportSvgDocument(
@@ -144,7 +155,7 @@ export function downloadSvgFile(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${slugifyFilename(phrase)}-sigil.svg`;
+  link.download = `${formatExportFilenameStem(phrase, options.spec?.profile.modifier)}.svg`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -189,7 +200,7 @@ export async function downloadPngFile(
             const pngUrl = URL.createObjectURL(pngBlob);
             const link = document.createElement('a');
             link.href = pngUrl;
-            link.download = `${slugifyFilename(phrase)}-sigil-${width}px.png`;
+            link.download = `${formatExportFilenameStem(phrase, options.spec?.profile.modifier)}.png`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);

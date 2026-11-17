@@ -622,21 +622,24 @@ const SigilCoreLayers: React.FC<SigilCoreLayersProps> = ({
             </>
           )}
 
-          {/* Primary Alchemical Emblem */}
-          <g transform={`translate(${CX}, ${CY})`}>
-            <AlchemyGlyph
-              symbol={core.alchemy.primary}
-              size={38}
-              stroke={vAlchemy.stroke}
-              strokeWidth={subScale < 1 ? (strokeWeight * 1.25) / subScale : cw * 1.4}
-            />
-          </g>
+          {/* Satellite Sub-Sigil Innermost Detected Element Emblem */}
+          {isCompound && (
+            <g transform={`translate(${CX}, ${CY})`}>
+              <ElementGlyph
+                element={core.elements.primary}
+                size={40}
+                stroke={vAlchemy.stroke}
+                strokeWidth={(strokeWeight * 1.3) / subScale}
+              />
+            </g>
+          )}
 
-          {/* Auxiliary Flanking Alchemical Nodes along rotation axis (Main sigil only) */}
+          {/* Flanking Alchemical Nodes along rotation axis (Main sigil only: Primary at 0°, Auxiliary at 180°) */}
           {!isCompound &&
             [0, 180].map((offset) => {
               const deg = (core.alchemy.rotationDeg + offset) % 360;
               const pos = polarToCartesian(CX, CY, 52, deg);
+              const symbol = offset === 0 ? core.alchemy.primary : core.alchemy.auxiliary;
               return (
                 <g key={`alc-aux-${offset}`} transform={`translate(${pos.x}, ${pos.y})`}>
                   <circle
@@ -649,7 +652,7 @@ const SigilCoreLayers: React.FC<SigilCoreLayersProps> = ({
                     data-ink-role="primary"
                   />
                   <AlchemyGlyph
-                    symbol={core.alchemy.auxiliary}
+                    symbol={symbol}
                     size={10.5}
                     stroke={vAlchemy.stroke}
                     strokeWidth={cw * 0.8}
@@ -657,6 +660,26 @@ const SigilCoreLayers: React.FC<SigilCoreLayersProps> = ({
                 </g>
               );
             })}
+        </g>
+      )}
+
+      {/* Main Sigil Innermost Bindu Emblem: Detected Primary Element */}
+      {!isCompound && (visibility.elements || visibility.alchemy) && (
+        <g
+          id="layer-core-element"
+          transform={`translate(${CX}, ${CY})`}
+          opacity={Math.max(
+            visibility.elements ? vElements.opacity : 0,
+            visibility.alchemy ? vAlchemy.opacity : 0
+          )}
+          style={{ transition: 'opacity 180ms ease' }}
+        >
+          <ElementGlyph
+            element={core.elements.primary}
+            size={36}
+            stroke={vElements.stroke !== '#111315' ? vElements.stroke : vAlchemy.stroke}
+            strokeWidth={cw * 1.4}
+          />
         </g>
       )}
     </g>

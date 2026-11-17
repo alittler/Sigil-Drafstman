@@ -4,6 +4,8 @@ import type {
   ElementType,
   LayerVisibility,
   LunarPhase,
+  MagicClassification,
+  MagicDictionaryMode,
   ManualOverrides,
   PhoneticProfile,
   PlanetaryAspect,
@@ -15,6 +17,11 @@ import type {
   SigilCoreSpec,
   SigilSpec,
 } from '../types/sigil';
+import {
+  buildDomainRuleProfile,
+  classifyMagicPhrase,
+  type DomainRuleProfile,
+} from './magicDictionary';
 import {
   ALL_ARCANE_GLYPHS,
   CONCENTRIC_NODE_GLYPHS,
@@ -146,6 +153,71 @@ function fnv1aHash(str: string): number {
 }
 
 /**
+ * Separate seed mixing algorithm used when a trailing modifier code
+ * (e.g., "Ignis Et Terra-50868228" or "Fireball #alice") is present.
+ * Produces an independent 32-bit hashSeed while preserving dictionary rules for baseText.
+ */
+function deriveModifiedSeed(normalizedBase: string, modifier: string): number {
+  const baseHash = fnv1aHash(normalizedBase || 'empty');
+  const modClean = modifier.trim().toLowerCase();
+  let h = (baseHash ^ 0x9e3779b9) >>> 0;
+
+  if (/^\d+$/.test(modClean)) {
+    const numVal = Number(modClean);
+    if (Number.isFinite(numVal)) {
+      h ^= numVal >>> 0;
+      h = Math.imul(h, 0x85ebca6b) >>> 0;
+      h ^= Math.floor(numVal / 0x100000000) >>> 0;
+      h = Math.imul(h, 0xc2b2ae35) >>> 0;
+    }
+  }
+
+  for (let i = 0; i < modClean.length; i++) {
+    h ^= modClean.charCodeAt(i);
+    h = Math.imul(h ^ (h >>> 13), 0x27d4eb2d) >>> 0;
+    h = ((h << 11) | (h >>> 21)) >>> 0;
+  }
+
+  // Murmur3 32-bit avalanche finalizer
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * Split raw input text into base spell/phrase text and an optional trailing modifier seed
+ * (supports `-<code-with-digit>` like `Ignis Et Terra-50868228` or `#<tag>` like `Fireball #alice`).
+ */
+export function splitPhraseAndModifier(rawText: string): {
+  baseText: string;
+  modifier: string | null;
+} {
+  const trimmed = rawText.trim();
+  if (!trimmed) return { baseText: '', modifier: null };
+
+  const hashMatch = trimmed.match(/^(.*?)\s*#\s*([A-Za-z0-9_-]{1,32})\s*$/);
+  if (hashMatch && hashMatch[1].trim().length > 0) {
+    return {
+      baseText: hashMatch[1].trim(),
+      modifier: hashMatch[2].trim(),
+    };
+  }
+
+  const dashMatch = trimmed.match(/^(.*\S)\s*-\s*([A-Za-z0-9]*\d[A-Za-z0-9]*)\s*$/);
+  if (dashMatch && dashMatch[1].trim().length > 0) {
+    return {
+      baseText: dashMatch[1].trim(),
+      modifier: dashMatch[2].trim(),
+    };
+  }
+
+  return { baseText: trimmed, modifier: null };
+}
+
+/**
  * Pythagorean digit reduction (1..9, or 0 for empty).
  */
 function reduceDigits(num: number): number {
@@ -168,10 +240,15 @@ const FRICATIVES = new Set(['f', 'v', 's', 'z', 'h', 'x']);
 const LIQUIDS_NASALS = new Set(['l', 'r', 'm', 'n', 'w', 'j']);
 
 /**
- * Analyze phonetic articulation, gematria sum, and deterministic hash seed.
+ * Analyze phonetic articulation, gematria sum, and deterministic hash seed
+ * (applying the separate modifier seed algorithm when a modifier suffix is present).
  */
-export function analyzeText(rawText: string): PhoneticProfile {
-  const normalized = rawText.trim().toLowerCase();
+export function analyzeText(rawText: string, externalModifier?: string | null): PhoneticProfile {
+  const split = splitPhraseAndModifier(rawText);
+  const cleanExternal = externalModifier?.trim() ? externalModifier.trim() : null;
+  const modifier = externalModifier !== undefined ? cleanExternal : split.modifier;
+  const baseText = externalModifier !== undefined ? rawText.trim() : split.baseText;
+  const normalized = baseText.toLowerCase();
   const letters = normalized.replace(/[^a-z0-9]/g, '');
   const words = normalized.split(/\s+/).filter(Boolean);
 
@@ -196,8 +273,14 @@ export function analyzeText(rawText: string): PhoneticProfile {
     else if (LIQUIDS_NASALS.has(ch)) liquidNasalCount++;
   }
 
+  const hashSeed = modifier
+    ? deriveModifiedSeed(normalized, modifier)
+    : fnv1aHash(normalized || 'empty');
+
   return {
     normalizedText: normalized,
+    baseText,
+    modifier,
     charCount: letters.length,
     wordCount: words.length,
     vowelCount,
@@ -206,7 +289,7 @@ export function analyzeText(rawText: string): PhoneticProfile {
     liquidNasalCount,
     gematriaSum,
     digitRoot: reduceDigits(gematriaSum),
-    hashSeed: fnv1aHash(normalized || 'empty'),
+    hashSeed,
   };
 }
 
@@ -342,71 +425,154 @@ function computePlanetaryAspects(nodes: PlanetaryNode[]): PlanetaryAspect[] {
 function deriveCoreSpec(
   profile: PhoneticProfile,
   word: string,
-  isSubSigil = false
-): SigilCoreSpec {
+  isSubSigil = false,
+  precomputedClassification?: MagicClassification,
+  dictionaryMode: MagicDictionaryMode = 'auto'
+): { core: SigilCoreSpec; classification: MagicClassification; rules: DomainRuleProfile } {
   const s = profile.hashSeed;
   const b0 = s & 0xff;
   const b1 = (s >>> 8) & 0xff;
   const b2 = (s >>> 16) & 0xff;
   const b3 = (s >>> 24) & 0xff;
+  const hasModifier = profile.modifier !== null;
 
-  const motifIndex = (profile.digitRoot + profile.wordCount + (b0 % 2)) % ALL_SACRED_MOTIFS.length;
-  const sacredMotif = ALL_SACRED_MOTIFS[motifIndex];
-
-  // 4. Polygons, Sacred Geometry & Yantra Shatkona (3 contrasting polygonal levels with strong radial/order separation)
-  const sides =
-    profile.charCount === 0
-      ? 8
-      : VALID_POLYGON_SIDES[(profile.digitRoot + profile.wordCount) % VALID_POLYGON_SIDES.length];
-  const starStep = pickValidStarStep(sides, b1, isSubSigil ? 0.44 : 0.36);
-  const distinctInnerPool = VALID_INNER_SIDES.filter((n) => !arePolygonOrdersSimilar(sides, n));
-  const innerPool = distinctInnerPool.length > 0 ? distinctInnerPool : [3, 5];
-  const innerSides = innerPool[(sides + b2) % innerPool.length];
-  const polygonRotationDeg = snap15((profile.digitRoot * 15 + (b3 % 4) * 15) % 360);
-  const yantraTriangles: 0 | 1 = sacredMotif === 'sri-yantra' ? 1 : 0;
-  const { tertiarySides, tertiaryStarStep } = resolveTertiaryPolygon(
-    sides,
-    innerSides,
-    yantraTriangles,
-    starStep,
-    b2 ^ profile.charCount
-  );
-  const flowerOfLife =
-    !isSubSigil &&
-    (sacredMotif === 'sacred-rosette' ||
-      sacredMotif === 'eldritch-mandala' ||
-      profile.vowelCount >= 4);
-
-  // 6. Classical Elements (Phonetic articulation mapping)
-  const elementScores: Array<{ el: ElementType; score: number }> = [
+  // Phonetic elemental baseline (always computed as tie-breaker / fallback)
+  const phoneticScores: Array<{ el: ElementType; score: number }> = [
     { el: 'fire', score: profile.plosiveCount * 3 + (b0 % 3) },
     { el: 'air', score: profile.fricativeCount * 3 + (b1 % 3) },
     { el: 'water', score: profile.vowelCount * 2 + (b2 % 3) },
     { el: 'earth', score: profile.liquidNasalCount * 3 + (b3 % 3) },
   ];
-  elementScores.sort((a, b) => b.score - a.score);
-  const primaryElement = elementScores[0].el;
-  const secondaryElement = elementScores[1].el;
-  const elementRotationDeg = snap15(((ALL_ELEMENTS.indexOf(primaryElement) * 6 + profile.wordCount) * 15) % 360);
-  const quadrantCount: 2 | 4 = profile.charCount >= 8 ? 4 : 2;
+  phoneticScores.sort((a, b) => b.score - a.score);
+  const phoneticPrimary = phoneticScores[0].el;
+  const phoneticSecondary = phoneticScores[1].el;
 
-  // 7. Alchemical Symbols Core
-  const primaryAlchemy = ALL_ALCHEMY_SYMBOLS[(profile.gematriaSum + profile.digitRoot) % ALL_ALCHEMY_SYMBOLS.length];
-  let auxiliaryAlchemy = ALL_ALCHEMY_SYMBOLS[(b2 + profile.wordCount + 3) % ALL_ALCHEMY_SYMBOLS.length];
-  if (auxiliaryAlchemy === primaryAlchemy) {
-    auxiliaryAlchemy = ALL_ALCHEMY_SYMBOLS[(ALL_ALCHEMY_SYMBOLS.indexOf(primaryAlchemy) + 1) % ALL_ALCHEMY_SYMBOLS.length];
+  // Semantic / Spellbook dictionary classification (strictly from baseText, unaffected by modifier)
+  const classification =
+    precomputedClassification ??
+    classifyMagicPhrase(
+      profile.baseText || word,
+      phoneticPrimary,
+      phoneticSecondary,
+      dictionaryMode
+    );
+  const rules = buildDomainRuleProfile(classification);
+  const hasSemanticRule = classification.source !== 'phonetic';
+
+  // Motif & Geometry — constrained by dictionary rules while varied by hashSeed bytes
+  const motifPool = hasSemanticRule ? rules.allowedMotifs : ALL_SACRED_MOTIFS;
+  const motifSeed = hasModifier
+    ? profile.digitRoot + profile.wordCount + b0 + (b3 % 4)
+    : profile.digitRoot + profile.wordCount + (b0 % 2);
+  const sacredMotif = motifPool[motifSeed % motifPool.length];
+
+  const sidesPool =
+    hasSemanticRule && rules.allowedSides.length > 0 ? rules.allowedSides : VALID_POLYGON_SIDES;
+  const sides =
+    profile.charCount === 0
+      ? 8
+      : sidesPool[
+          (profile.digitRoot + profile.wordCount + (hasModifier ? b1 : 0)) % sidesPool.length
+        ];
+
+  const candidateStarStep = pickValidStarStep(
+    sides,
+    hasModifier ? b1 ^ b2 : b1,
+    isSubSigil ? 0.44 : 0.36
+  );
+  const yantraTriangles: 0 | 1 =
+    sacredMotif === 'sri-yantra' || (rules.preferShatkona && b0 % 3 !== 2) ? 1 : 0;
+  const starStep =
+    yantraTriangles === 1
+      ? 1
+      : rules.preferStar && candidateStarStep > 1
+      ? candidateStarStep
+      : candidateStarStep;
+
+  const distinctInnerPool = VALID_INNER_SIDES.filter((n) => !arePolygonOrdersSimilar(sides, n));
+  const innerPool = distinctInnerPool.length > 0 ? distinctInnerPool : [3, 5];
+  const innerSides = innerPool[(sides + b2 + (hasModifier ? b0 : 0)) % innerPool.length];
+  const polygonRotationDeg = snap15(
+    ((hasModifier ? b0 + b3 : profile.digitRoot) * 15 + (b3 % 4) * 15) % 360
+  );
+  const { tertiarySides, tertiaryStarStep } = resolveTertiaryPolygon(
+    sides,
+    innerSides,
+    yantraTriangles,
+    starStep,
+    b2 ^ profile.charCount ^ (hasModifier ? b3 : 0)
+  );
+  const flowerOfLife =
+    !isSubSigil &&
+    Boolean(
+      rules.preferFlowerOfLife ||
+        sacredMotif === 'sacred-rosette' ||
+        sacredMotif === 'eldritch-mandala' ||
+        profile.vowelCount >= 4
+    );
+
+  // 6. Classical Elements (Dictionary classification primary/secondary with modifier rotation variation)
+  const primaryElement = classification.primaryElement;
+  let secondaryElement =
+    classification.secondaryElement && classification.secondaryElement !== primaryElement
+      ? classification.secondaryElement
+      : phoneticPrimary !== primaryElement
+      ? phoneticPrimary
+      : phoneticSecondary;
+  if (hasModifier && !classification.secondaryElement && b2 % 2 === 1) {
+    const otherEls = ALL_ELEMENTS.filter((e) => e !== primaryElement);
+    secondaryElement = otherEls[b2 % otherEls.length];
   }
-  const alchemyRotationDeg = snap15((profile.digitRoot * 30) % 360);
+  const elementRotationDeg = snap15(
+    ((ALL_ELEMENTS.indexOf(primaryElement) * 6 +
+      profile.wordCount +
+      (hasModifier ? b2 % 8 : 0)) *
+      15) %
+      360
+  );
+  const quadrantCount: 2 | 4 =
+    classification.source === 'spellbook' && (classification.spellLevel ?? 0) >= 5
+      ? 4
+      : profile.charCount >= 8
+      ? 4
+      : 2;
 
-  // 5. Planetary Alignments
-  const planetCount = profile.charCount === 0 ? 3 : Math.min(5, Math.max(2, 2 + (profile.wordCount % 4) + (profile.charCount % 3)));
+  // 7. Alchemical Symbols Core (selected from dictionary element/school pool, varied by hashSeed)
+  const alcPool = hasSemanticRule ? rules.alchemyPool : ALL_ALCHEMY_SYMBOLS;
+  const primaryAlchemy =
+    alcPool[(profile.gematriaSum + profile.digitRoot + (hasModifier ? b2 : 0)) % alcPool.length];
+  let auxiliaryAlchemy =
+    ALL_ALCHEMY_SYMBOLS[(b2 + profile.wordCount + 3 + (hasModifier ? b1 : 0)) % ALL_ALCHEMY_SYMBOLS.length];
+  if (auxiliaryAlchemy === primaryAlchemy) {
+    auxiliaryAlchemy =
+      ALL_ALCHEMY_SYMBOLS[
+        (ALL_ALCHEMY_SYMBOLS.indexOf(primaryAlchemy) + 1) % ALL_ALCHEMY_SYMBOLS.length
+      ];
+  }
+  const alchemyRotationDeg = snap15(
+    ((profile.digitRoot * 2 + (hasModifier ? b0 % 12 : 0)) * 15) % 360
+  );
+
+  // 5. Planetary Alignments (anchored to domain planet pool + full pool fill, rotated by hashSeed)
+  const planetCount =
+    profile.charCount === 0
+      ? 3
+      : Math.min(5, Math.max(2, 2 + (profile.wordCount % 4) + (profile.charCount % 3)));
   const planetRotDeg = snap15(((b0 + profile.gematriaSum) % 24) * 15);
+  const mergedPlanetPool = hasSemanticRule
+    ? [...rules.planetPool, ...ALL_PLANETS.filter((p) => !rules.planetPool.includes(p))]
+    : ALL_PLANETS;
   const selectedPlanets: PlanetId[] = [];
   for (let i = 0; i < planetCount; i++) {
-    const idx = (profile.digitRoot + i * 2 + ((s >>> (i * 4)) & 0x07)) % ALL_PLANETS.length;
-    let candidate = ALL_PLANETS[idx];
+    const idx =
+      (i === 0 && hasSemanticRule && !hasModifier
+        ? 0
+        : profile.digitRoot + i * 2 + ((s >>> (i * 4)) & 0x07) + (hasModifier ? b1 % 3 : 0)) %
+      mergedPlanetPool.length;
+    let candidate = mergedPlanetPool[idx];
     while (selectedPlanets.includes(candidate)) {
-      candidate = ALL_PLANETS[(ALL_PLANETS.indexOf(candidate) + 1) % ALL_PLANETS.length];
+      candidate =
+        mergedPlanetPool[(mergedPlanetPool.indexOf(candidate) + 1) % mergedPlanetPool.length];
     }
     selectedPlanets.push(candidate);
   }
@@ -430,7 +596,7 @@ function deriveCoreSpec(
       ? ` & inner {${tertiarySides}/${tertiaryStarStep}} star`
       : ` & inner ${tertiarySides}-gon`;
 
-  return {
+  const core: SigilCoreSpec = {
     word,
     polygons: {
       sides,
@@ -439,7 +605,8 @@ function deriveCoreSpec(
       tertiarySides,
       tertiaryStarStep,
       rotationDeg: polygonRotationDeg,
-      showInscribedCircle: profile.vowelCount > profile.plosiveCount,
+      showInscribedCircle:
+        rules.preferInscribedCircle ?? profile.vowelCount > profile.plosiveCount,
       sacredMotif,
       yantraTriangles,
       flowerOfLife,
@@ -464,13 +631,15 @@ function deriveCoreSpec(
     },
     notes: {
       polygons: `${SACRED_MOTIF_LABELS[sacredMotif]}: ${sides}-gon ${polygonInnerSummary}${polygonTertiarySummary} at ${polygonRotationDeg}°${flowerOfLife ? ' over Seed of Life lattice' : ''}.`,
-      elements: `${ELEMENT_LABELS[primaryElement]} primary (${profile.plosiveCount} plosives / ${profile.fricativeCount} fricatives / ${profile.vowelCount} vowels / ${profile.liquidNasalCount} liquids), ${ELEMENT_LABELS[secondaryElement]} secondary.`,
+      elements: `${ELEMENT_LABELS[primaryElement]} Bindu core & primary pole (${classification.summary}), ${ELEMENT_LABELS[secondaryElement]} secondary.`,
       alchemy: isSubSigil
-        ? `${ALCHEMY_LABELS[primaryAlchemy]} bindu core emblem at ${alchemyRotationDeg}°.`
-        : `${ALCHEMY_LABELS[primaryAlchemy]} bindu core with ${ALCHEMY_LABELS[auxiliaryAlchemy]} flanking nodes.`,
+        ? `${ELEMENT_LABELS[primaryElement]} Bindu core emblem at ${alchemyRotationDeg}° (${ALCHEMY_LABELS[primaryAlchemy]} seal).`
+        : `${ELEMENT_LABELS[primaryElement]} Bindu core flanked by ${ALCHEMY_LABELS[primaryAlchemy]} & ${ALCHEMY_LABELS[auxiliaryAlchemy]} nodes.`,
       planets: `${nodes.length} planetary bodies (${nodes.map((n) => PLANET_LABELS[n.planet]).join(', ')}) forming ${aspects.length} geometric aspect${aspects.length === 1 ? '' : 's'}.`,
     },
   };
+
+  return { core, classification, rules };
 }
 
 function computeSubSigilAngles(compoundAxisDeg: number, subCount: number): number[] {
@@ -603,36 +772,81 @@ function buildRuneStations(
 /**
  * Deterministically translate any input text into a complete 7-layer SigilSpec.
  */
-export function deriveSigilFromText(rawText: string): SigilSpec {
-  const profile = analyzeText(rawText);
-  const words = rawText.trim().split(/\s+/).filter(Boolean);
+export function deriveSigilFromText(
+  rawText: string,
+  externalModifier?: string | null,
+  dictionaryMode: MagicDictionaryMode = 'auto'
+): SigilSpec {
+  const profile = analyzeText(rawText, externalModifier);
+  const words = profile.baseText.split(/\s+/).filter(Boolean);
   const isCompound = words.length >= 2;
+  const hasModifier = profile.modifier !== null;
 
   // In compound spells, the first word creates the large overall outer sigil (Layers 1–4 frame)
   // while subsequent words (words[1..]) become smaller inner sigils on the rune/seal band.
+  // Phrase-level spellbook & keyword categorization runs on the full baseText (e.g., "Ignis Et Terra" or "Cone of Cold").
   const primaryWord = words[0] ?? 'sigil';
-  const frameProfile = isCompound ? analyzeText(primaryWord) : profile;
-  const s = frameProfile.hashSeed;
+  const frameProfile = isCompound
+    ? analyzeText(primaryWord, profile.modifier)
+    : profile;
+  const s = profile.hashSeed;
 
   const b0 = s & 0xff;
   const b1 = (s >>> 8) & 0xff;
   const b2 = (s >>> 16) & 0xff;
+  const b3 = (s >>> 24) & 0xff;
+
+  // Phrase-level magic classification
+  const basePhoneticScores: Array<{ el: ElementType; score: number }> = [
+    { el: 'fire', score: frameProfile.plosiveCount * 3 + (b0 % 3) },
+    { el: 'air', score: frameProfile.fricativeCount * 3 + (b1 % 3) },
+    { el: 'water', score: frameProfile.vowelCount * 2 + (b2 % 3) },
+    { el: 'earth', score: frameProfile.liquidNasalCount * 3 + (b3 % 3) },
+  ];
+  basePhoneticScores.sort((a, b) => b.score - a.score);
+  const phraseCategory = classifyMagicPhrase(
+    profile.baseText || primaryWord,
+    basePhoneticScores[0].el,
+    basePhoneticScores[1].el,
+    dictionaryMode
+  );
+
+  // Primary Core (uses phraseCategory so main sigil embodies the full spell's school & element)
+  const { core: rootCore, rules: domainRules } = deriveCoreSpec(
+    frameProfile,
+    primaryWord,
+    false,
+    phraseCategory,
+    dictionaryMode
+  );
 
   const subWords = isCompound ? words.slice(1, 7) : [];
-  const compoundAxisDeg = snap15(subWords.length <= 2 ? 90 : (b0 % 24) * 15);
+  const compoundAxisDeg = snap15(
+    subWords.length <= 2 && !hasModifier ? 90 : ((b0 + (hasModifier ? b2 : 0)) % 24) * 15
+  );
   const subAngles = computeSubSigilAngles(compoundAxisDeg, subWords.length);
 
   // 1. Singular Bounding Circle + Eldritch Arcs
-  const doubleRing = isCompound || (frameProfile.digitRoot % 2 === 0 && frameProfile.charCount > 0);
+  const doubleRing = Boolean(
+    domainRules.preferDoubleRing ||
+      isCompound ||
+      (frameProfile.digitRoot % 2 === 0 && frameProfile.charCount > 0)
+  );
   const eldritchArcs = frameProfile.charCount > 0;
 
   // 2. Celestial Markers
-  const lunarIndex = (frameProfile.vowelCount + frameProfile.digitRoot) % 4;
+  const lunarIndex =
+    (frameProfile.vowelCount + frameProfile.digitRoot + (hasModifier ? b3 % 4 : 0)) % 4;
   const lunarPhase = ALL_LUNAR_PHASES[lunarIndex];
   const celestialRot = snap15((b1 % 24) * 15);
-  const lunarAngleDeg = snap15((frameProfile.vowelCount * 45 + (b0 % 4) * 15) % 360);
-  const solarAngleDeg = snap15(lunarAngleDeg + (frameProfile.charCount % 2 === 0 ? 180 : 120));
-  const chordCount = frameProfile.charCount === 0 ? 0 : 2 + (frameProfile.digitRoot % 3);
+  const lunarAngleDeg = snap15(
+    (frameProfile.vowelCount * 45 + ((b0 + (hasModifier ? b2 : 0)) % 8) * 15) % 360
+  );
+  const solarAngleDeg = snap15(
+    lunarAngleDeg + (frameProfile.charCount % 2 === 0 ? 180 : 120) + (hasModifier ? (b1 % 2) * 30 : 0)
+  );
+  const chordCount =
+    frameProfile.charCount === 0 ? 0 : 2 + ((frameProfile.digitRoot + (hasModifier ? b3 : 0)) % 3);
 
   // 3. Arcane Runes & Seals (15-degree intervals, placed relative to sub-sigils when compound)
   const stationOptions: Array<4 | 6 | 8 | 12 | 24> = [4, 6, 8, 12, 24];
@@ -643,16 +857,20 @@ export function deriveSigilFromText(rawText: string): SigilSpec {
   else if (frameProfile.charCount <= 16) stationCount = 12;
   else stationCount = stationOptions[(frameProfile.wordCount + 2) % stationOptions.length];
 
-  const runeRotationDeg = snap15(((frameProfile.gematriaSum + b2) % 24) * 15);
-  const dualBand = frameProfile.charCount >= 10;
+  if (domainRules.minStationCount && stationCount < domainRules.minStationCount) {
+    stationCount = domainRules.minStationCount;
+  }
+
+  const runeRotationDeg = snap15(((frameProfile.gematriaSum + b2 + (hasModifier ? b0 : 0)) % 24) * 15);
+  const dualBand = frameProfile.charCount >= 10 || phraseCategory.source === 'spellbook';
 
   const stepDeg = 360 / stationCount;
   const letters = frameProfile.normalizedText.replace(/[^a-z0-9]/g, '') || 'sigil';
 
-  // Primary Core
-  const rootCore = deriveCoreSpec(frameProfile, primaryWord);
-
-  const runePalette: RunePaletteMode = 'auto';
+  const runePalette: RunePaletteMode =
+    phraseCategory.source === 'spellbook' && domainRules.runePalettePool.length > 1
+      ? domainRules.runePalettePool[hasModifier ? b2 % domainRules.runePalettePool.length : 1]
+      : 'auto';
   const glyphs = buildRuneStations(
     letters,
     stationCount,
@@ -661,9 +879,16 @@ export function deriveSigilFromText(rawText: string): SigilSpec {
     subAngles
   );
 
-  // Subsequent Words -> Sub-Sigils docked on the r=278 inner rune rail
-  const subSigils: SigilCoreSpec[] = subWords.map((word) =>
-    deriveCoreSpec(analyzeText(word), word, true)
+  // Subsequent Words -> Sub-Sigils docked on the r=278 inner rune rail (preserving per-word dictionary rules)
+  const subSigils: SigilCoreSpec[] = subWords.map(
+    (word) =>
+      deriveCoreSpec(
+        analyzeText(word, profile.modifier),
+        word,
+        true,
+        undefined,
+        dictionaryMode
+      ).core
   );
 
   const glyphPreview = glyphs.map((g) => g.char).join(' ');
@@ -671,6 +896,7 @@ export function deriveSigilFromText(rawText: string): SigilSpec {
   return {
     text: rawText,
     profile,
+    category: phraseCategory,
     compoundAxisDeg,
     subSigils,
     bounding: {
@@ -710,7 +936,7 @@ export function deriveSigilFromText(rawText: string): SigilSpec {
         ? `Main "${primaryWord}": ${rootCore.notes.elements}`
         : rootCore.notes.elements,
       alchemy: isCompound
-        ? `Main "${primaryWord}": ${rootCore.notes.alchemy} Satellites: ${subSigils.map((c) => `${c.word} (${ALCHEMY_LABELS[c.alchemy.primary]})`).join(' · ')}.`
+        ? `Main "${primaryWord}": ${rootCore.notes.alchemy} Satellites: ${subSigils.map((c) => `${c.word} (${ELEMENT_LABELS[c.elements.primary]})`).join(' · ')}.`
         : rootCore.notes.alchemy,
       planets: isCompound
         ? `Main "${primaryWord}": ${rootCore.notes.planets}`
@@ -843,8 +1069,10 @@ export function countActiveOverrides(overrides: ManualOverrides): number {
  */
 export function applyManualOverrides(derived: SigilSpec, overrides: ManualOverrides): SigilSpec {
   const isCompound = derived.subSigils.length >= 1;
-  const words = derived.text.trim().split(/\s+/).filter(Boolean);
-  const frameProfile = isCompound ? analyzeText(words[0] ?? 'sigil') : derived.profile;
+  const words = derived.profile.baseText.split(/\s+/).filter(Boolean);
+  const frameProfile = isCompound
+    ? analyzeText(words[0] ?? 'sigil', derived.profile.modifier)
+    : derived.profile;
 
   const stationCount = overrides.runeStationCount ?? derived.runes.stationCount;
   const runeRot = snap15(overrides.runeRotationDeg ?? derived.runes.rotationDeg);
@@ -856,7 +1084,7 @@ export function applyManualOverrides(derived: SigilSpec, overrides: ManualOverri
   const celestialDelta = celestialRot - derived.celestial.rotationDeg;
   const compoundAxisDeg = snap15(overrides.compoundAxisDeg ?? derived.compoundAxisDeg);
 
-  const rootCore = applyCoreOverrides(derived, frameProfile.hashSeed, overrides);
+  const rootCore = applyCoreOverrides(derived, derived.profile.hashSeed, overrides);
   const subAngles = computeSubSigilAngles(compoundAxisDeg, derived.subSigils.length);
 
   const glyphs = buildRuneStations(
@@ -872,7 +1100,12 @@ export function applyManualOverrides(derived: SigilSpec, overrides: ManualOverri
 
   const subSigils: SigilCoreSpec[] = derived.subSigils.map((sub, idx) => {
     const subOvr = overrides.subOverrides?.[idx] ?? {};
-    const updatedCore = applyCoreOverrides(sub, analyzeText(sub.word).hashSeed, subOvr, true);
+    const updatedCore = applyCoreOverrides(
+      sub,
+      analyzeText(sub.word, derived.profile.modifier).hashSeed,
+      subOvr,
+      true
+    );
     return {
       ...sub,
       ...updatedCore,
@@ -911,6 +1144,10 @@ export function applyManualOverrides(derived: SigilSpec, overrides: ManualOverri
       runes: isCompound
         ? `${glyphs.length} stations anchored in arcs between ${subSigils.length} band-docked sub-sigil${subSigils.length === 1 ? '' : 's'} [${RUNE_PALETTE_LABELS[runePalette]}]: ${glyphPreview}.`
         : `${stationCount} stations every ${stepDeg}° (rotated ${runeRot}°) [${RUNE_PALETTE_LABELS[runePalette]}]: ${glyphPreview}${dualBand ? ' · dual band' : ''}.`,
+      elements: `${isCompound ? `Main "${words[0] ?? 'sigil'}": ` : ''}${ELEMENT_LABELS[rootCore.elements.primary]} Bindu core & primary pole (${derived.category.summary}), ${ELEMENT_LABELS[rootCore.elements.secondary]} secondary.`,
+      alchemy: isCompound
+        ? `Main "${words[0] ?? 'sigil'}": ${ELEMENT_LABELS[rootCore.elements.primary]} Bindu core flanked by ${ALCHEMY_LABELS[rootCore.alchemy.primary]} & ${ALCHEMY_LABELS[rootCore.alchemy.auxiliary]} nodes. Satellites: ${subSigils.map((c) => `${c.word} (${ELEMENT_LABELS[c.elements.primary]})`).join(' · ')}.`
+        : `${ELEMENT_LABELS[rootCore.elements.primary]} Bindu core flanked by ${ALCHEMY_LABELS[rootCore.alchemy.primary]} & ${ALCHEMY_LABELS[rootCore.alchemy.auxiliary]} nodes.`,
     },
   };
 }
@@ -977,7 +1214,7 @@ export interface MicroScriptItem {
  * Derive the repeating 72-mark direct-cipher micro-script ring rendered in Layer 02.
  */
 export function deriveMicroScriptItems(spec: SigilSpec, count = 72): MicroScriptItem[] {
-  const baseTokens = transliteratePhraseToMicroGlyphs(spec.text);
+  const baseTokens = transliteratePhraseToMicroGlyphs(spec.profile.baseText || spec.text);
   const ringCycle: MicroGlyphToken[] = [
     ...baseTokens,
     {

@@ -4,6 +4,7 @@ import type { SigilSpec } from '../types/sigil';
 import {
   downloadPngFile,
   downloadSvgFile,
+  formatExportFilenameStem,
   type ExportBackground,
 } from '../engine/exportSigil';
 import { buildShareableSigilUrl, copyTextToClipboard } from '../engine/sigilUrl';
@@ -13,6 +14,7 @@ interface ExportModalProps {
   onClose: () => void;
   svgRef: React.RefObject<SVGSVGElement | null>;
   phrase: string;
+  dictionary?: string;
   spec: SigilSpec;
   showSeedOfLife: boolean;
   showBounding: boolean;
@@ -24,6 +26,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   svgRef,
   phrase,
+  dictionary,
   spec,
   showSeedOfLife,
   showBounding,
@@ -39,7 +42,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  const shareUrl = buildShareableSigilUrl(phrase);
+  const shareUrl = buildShareableSigilUrl(
+    phrase,
+    spec.profile.modifier,
+    dictionary ?? spec.category.dictionaryId
+  );
 
   useEffect(() => {
     if (isOpen) {
@@ -266,9 +273,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </button>
         </div>
 
-        <div className="pt-2 border-t border-[#E2DFD7] flex items-center justify-between text-[11px] font-mono tabular-nums text-[#767A82]">
-          <span>Phrase: {phrase.trim() || 'Empty'}</span>
-          <span className="inline-flex items-center gap-1">
+        <div className="pt-2 border-t border-[#E2DFD7] flex items-center justify-between gap-3 text-[11px] font-mono tabular-nums text-[#767A82]">
+          <span
+            className="truncate"
+            title={`${formatExportFilenameStem(phrase, spec.profile.modifier)}.png`}
+          >
+            File: {formatExportFilenameStem(phrase, spec.profile.modifier)}.png
+          </span>
+          <span className="inline-flex items-center gap-1 shrink-0">
             <Download className="w-3 h-3" aria-hidden="true" />{' '}
             {includeTranslatedText ? '2048 px plate' : '2048×2048 px'}
           </span>

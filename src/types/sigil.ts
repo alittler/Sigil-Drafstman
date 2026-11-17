@@ -69,8 +69,38 @@ export interface RuneGlyphSpec {
   angleDeg: number; // Multiple of 15 degrees
 }
 
+export type MagicSchool =
+  | 'abjuration'
+  | 'conjuration'
+  | 'divination'
+  | 'enchantment'
+  | 'evocation'
+  | 'illusion'
+  | 'necromancy'
+  | 'transmutation';
+
+export type MagicClassificationSource = 'spellbook' | 'keywords' | 'phonetic';
+
+export type MagicDictionaryMode = 'auto' | 'srd' | 'roots' | 'phonetic';
+
+export type ResolvedDictionaryId = 'srd' | 'roots' | 'phonetic';
+
+export interface MagicClassification {
+  source: MagicClassificationSource;
+  dictionaryId: ResolvedDictionaryId;
+  primaryElement: ElementType;
+  secondaryElement?: ElementType;
+  school?: MagicSchool;
+  spellName?: string;
+  spellLevel?: number;
+  matchedTerms: string[];
+  summary: string;
+}
+
 export interface PhoneticProfile {
   normalizedText: string;
+  baseText: string;
+  modifier: string | null;
   charCount: number;
   wordCount: number;
   vowelCount: number;
@@ -141,6 +171,7 @@ export interface SigilCoreSpec {
 export interface SigilSpec {
   text: string;
   profile: PhoneticProfile;
+  category: MagicClassification;
   compoundAxisDeg: number; // 15° interval for multi-word sub-sigil placement
   subSigils: SigilCoreSpec[]; // Empty for single-word sigils; 1..6 inner sub-sigils for subsequent words (words 2+)
   bounding: {
@@ -216,6 +247,8 @@ export interface SavedSigilRecord {
   title: string;
   notes: string;
   text: string;
+  seed?: string;
+  dictionary?: MagicDictionaryMode;
   overrides: ManualOverrides;
   visibility: LayerVisibility;
   strokeWeight: number;

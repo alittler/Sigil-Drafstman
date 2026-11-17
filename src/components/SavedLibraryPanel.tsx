@@ -12,6 +12,7 @@ import { SigilSvg } from './SigilSvg';
 interface SavedLibraryPanelProps {
   records: SavedSigilRecord[];
   currentText: string;
+  currentSeed?: string;
   onSaveCurrent: (title: string, notes: string) => void;
   onLoadRecord: (record: SavedSigilRecord) => void;
   onDuplicateRecord: (record: SavedSigilRecord) => void;
@@ -22,6 +23,7 @@ interface SavedLibraryPanelProps {
 export const SavedLibraryPanel: React.FC<SavedLibraryPanelProps> = ({
   records,
   currentText,
+  currentSeed,
   onSaveCurrent,
   onLoadRecord,
   onDuplicateRecord,
@@ -104,7 +106,11 @@ export const SavedLibraryPanel: React.FC<SavedLibraryPanelProps> = ({
             }
           >
             {records.map((rec) => {
-              const spec = applyManualOverrides(deriveSigilFromText(rec.text), rec.overrides);
+              const effectiveSeed = rec.seed ?? currentSeed;
+              const spec = applyManualOverrides(
+                deriveSigilFromText(rec.text, effectiveSeed, rec.dictionary ?? 'auto'),
+                rec.overrides
+              );
               const dateStr = new Date(rec.updatedAt).toLocaleDateString(undefined, {
                 month: 'short',
                 day: 'numeric',
@@ -151,7 +157,7 @@ export const SavedLibraryPanel: React.FC<SavedLibraryPanelProps> = ({
                         {rec.title}
                       </button>
                       <div className="mt-0.5 text-xs font-mono tabular-nums text-[#4B4F56] truncate">
-                        "{rec.text}" · {ELEMENT_LABELS[spec.elements.primary]} · {dateStr}
+                        "{rec.text}"{effectiveSeed ? ` (${effectiveSeed})` : ''} · {ELEMENT_LABELS[spec.elements.primary]} · {dateStr}
                       </div>
                       {rec.notes && (
                         <p className="mt-1 text-xs text-[#767A82] line-clamp-2">{rec.notes}</p>

@@ -55,7 +55,8 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
   visibility,
   draftingOptions,
 }) => {
-  const words = spec.text.trim().split(/\s+/).filter(Boolean);
+  const baseText = (spec.profile.baseText || spec.text).trim();
+  const words = baseText.split(/\s+/).filter(Boolean);
   const primaryWord = words[0] ?? 'sigil';
   const futharkSpelling = transliterateWordToFuthark(primaryWord);
   const futharkWordStr = futharkSpelling.map((item) => item.rune).join('');
@@ -64,8 +65,9 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
   const innerSealGlyphs = deriveInnerSealGlyphs(spec);
   const innerSealString = innerSealGlyphs.map((g) => g.char).join(' ');
 
-  const microTokens = transliteratePhraseToMicroGlyphs(spec.text);
+  const microTokens = transliteratePhraseToMicroGlyphs(baseText);
   const microPhraseString = microTokens.map((token) => token.char).join('');
+  const hexSeed = `0x${spec.profile.hashSeed.toString(16).toUpperCase().padStart(8, '0')}`;
 
   const mainLevel2 =
     spec.polygons.yantraTriangles === 1
@@ -85,10 +87,20 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
     >
       {/* Part 1: Strings of Text & Glyphs Rendered in the Sigil */}
       <div className="space-y-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-[#4B4F56]">
-            Sigil Text Strings & Rune Sequences
-          </h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-baseline gap-2.5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-[#4B4F56]">
+              Sigil Text Strings & Rune Sequences
+            </h2>
+            <span className="font-mono text-[11px] text-[#1D4ED8]">
+              {spec.category.summary}
+            </span>
+            {spec.profile.modifier && (
+              <span className="font-mono text-[11px] text-[#4B4F56]">
+                · Seed {spec.profile.modifier} ({hexSeed})
+              </span>
+            )}
+          </div>
           <span className="font-mono text-[11px] text-[#767A82]">
             {visibility.runes ? 'Layer 02 active' : 'Layer 02 hidden'}
           </span>
@@ -268,7 +280,7 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
                   <ElementGlyph element={spec.elements.primary} size={18} stroke="#111315" strokeWidth={1.6} />
                 </svg>
                 <span className="text-[#111315] font-medium">{ELEMENT_LABELS[spec.elements.primary]}</span>
-                <span className="text-[10px] text-[#767A82]">Primary</span>
+                <span className="text-[10px] text-[#767A82]">Core</span>
               </span>
               <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-[#FFFFFF] border border-[#E2DFD7] rounded">
                 <svg width="15" height="15" viewBox="-14 -14 28 28" aria-hidden="true">
@@ -283,7 +295,7 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
           {/* Alchemy Core & Geometry */}
           <div className={`bg-[#F8F7F4] border border-[#E2DFD7] rounded px-3 py-2 space-y-1.5 ${visibility.alchemy ? '' : 'opacity-50'}`}>
             <div className="text-[11px] font-semibold text-[#111315]">
-              06. Alchemical Core & Geometry
+              06. Bindu & Flanking Alchemical Nodes
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#4B4F56]">
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-[#FFFFFF] border border-[#E2DFD7] rounded">
@@ -291,14 +303,14 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
                   <AlchemyGlyph symbol={spec.alchemy.primary} size={24} stroke="#111315" strokeWidth={1.8} />
                 </svg>
                 <span className="text-[#111315] font-medium">{ALCHEMY_LABELS[spec.alchemy.primary]}</span>
-                <span className="text-[10px] text-[#767A82]">Core</span>
+                <span className="text-[10px] text-[#767A82]">Flank +</span>
               </span>
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-[#FFFFFF] border border-[#E2DFD7] rounded">
                 <svg width="15" height="15" viewBox="-16 -16 32 32" aria-hidden="true">
                   <AlchemyGlyph symbol={spec.alchemy.auxiliary} size={24} stroke="#111315" strokeWidth={1.8} />
                 </svg>
                 <span className="text-[#111315] font-medium">{ALCHEMY_LABELS[spec.alchemy.auxiliary]}</span>
-                <span className="text-[10px] text-[#767A82]">Flank</span>
+                <span className="text-[10px] text-[#767A82]">Flank −</span>
               </span>
             </div>
             <div className="text-[10px] font-mono text-[#767A82]">
@@ -332,11 +344,11 @@ export const SigilLegendStrip: React.FC<SigilLegendStripProps> = ({
                     key={`sub-manifest-${idx}-${sub.word}`}
                     className="inline-flex items-center gap-1.5 px-2 py-1 bg-[#FFFFFF] border border-[#E2DFD7] rounded text-xs"
                   >
-                    <svg width="16" height="16" viewBox="-16 -16 32 32" aria-hidden="true">
-                      <AlchemyGlyph symbol={sub.alchemy.primary} size={24} stroke="#111315" strokeWidth={1.8} />
+                    <svg width="16" height="16" viewBox="-14 -14 28 28" aria-hidden="true">
+                      <ElementGlyph element={sub.elements.primary} size={18} stroke="#111315" strokeWidth={1.6} />
                     </svg>
                     <span className="font-mono font-semibold text-[#111315]">{sub.word}</span>
-                    <span className="text-[#4B4F56]">{ALCHEMY_LABELS[sub.alchemy.primary]}</span>
+                    <span className="text-[#4B4F56]">{ELEMENT_LABELS[sub.elements.primary]}</span>
                     <span className="font-mono text-[10px] text-[#767A82]">
                       {sub.polygons.sides}-gon · {subL2} · {subL3} · {subAngle}°
                     </span>

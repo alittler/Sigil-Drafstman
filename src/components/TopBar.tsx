@@ -1,7 +1,7 @@
 import React from 'react';
 import { Download } from 'lucide-react';
 
-export type ActiveWorkspaceView = 'workbench' | 'library' | 'guide';
+export type ActiveWorkspaceView = 'workbench' | 'spellbook' | 'library' | 'guide';
 
 interface TopBarProps {
   activeView: ActiveWorkspaceView;
@@ -16,6 +16,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const navItems: Array<{ id: ActiveWorkspaceView; label: string }> = [
     { id: 'workbench', label: 'Workbench' },
+    { id: 'spellbook', label: 'SRD Spellbook' },
     { id: 'library', label: 'Saved Library' },
     { id: 'guide', label: 'Symbol Guide' },
   ];

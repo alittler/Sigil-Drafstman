@@ -94,14 +94,19 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
   const right = 800;
   const maxWidth = right - left;
 
-  const phraseDisplay = spec.text.trim() || 'sigil';
-  const words = phraseDisplay.split(/\s+/).filter(Boolean);
+  const basePhraseDisplay = (spec.profile.baseText || spec.text).trim() || 'sigil';
+  const rawPhraseDisplay = spec.text.trim() || 'sigil';
+  const phraseDisplay =
+    spec.profile.modifier && !rawPhraseDisplay.endsWith(`-${spec.profile.modifier}`)
+      ? `${rawPhraseDisplay}-${spec.profile.modifier}`
+      : rawPhraseDisplay;
+  const words = basePhraseDisplay.split(/\s+/).filter(Boolean);
   const primaryWord = words[0] ?? 'sigil';
   const hashHex = `0x${spec.profile.hashSeed.toString(16).toUpperCase().padStart(8, '0')}`;
-  const titleLines = wrapTitleLines(phraseDisplay, 38);
+  const titleLines = wrapTitleLines(phraseDisplay, 36);
 
   const futharkSpelling = transliterateWordToFuthark(primaryWord);
-  const microTokens = transliteratePhraseToMicroGlyphs(phraseDisplay);
+  const microTokens = transliteratePhraseToMicroGlyphs(basePhraseDisplay);
 
   const futharkChipW = 54;
   const futharkGap = 6;
@@ -118,7 +123,7 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
   y += 22;
 
   const titleStartY = y;
-  const headerBlockHeight = Math.max(46, 22 + titleLines.length * 25);
+  const headerBlockHeight = Math.max(54, 22 + titleLines.length * 25);
   y += headerBlockHeight + 12;
 
   // Futhark row
@@ -197,7 +202,7 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
 
   const elemAlcItems: Array<{ label: string; hasIcon?: boolean; renderIcon?: () => React.ReactNode }> = [
     {
-      label: `${ELEMENT_LABELS[spec.elements.primary]} (Primary)`,
+      label: `${ELEMENT_LABELS[spec.elements.primary]} (Bindu Core)`,
       hasIcon: true,
       renderIcon: () => <ElementGlyph element={spec.elements.primary} size={13} stroke="#111315" strokeWidth={1.45} />,
     },
@@ -207,12 +212,12 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
       renderIcon: () => <ElementGlyph element={spec.elements.secondary} size={13} stroke="#111315" strokeWidth={1.45} />,
     },
     {
-      label: `${ALCHEMY_LABELS[spec.alchemy.primary]} (Bindu)`,
+      label: `${ALCHEMY_LABELS[spec.alchemy.primary]} (Flank +)`,
       hasIcon: true,
       renderIcon: () => <AlchemyGlyph symbol={spec.alchemy.primary} size={14} stroke="#111315" strokeWidth={1.5} />,
     },
     {
-      label: `${ALCHEMY_LABELS[spec.alchemy.auxiliary]} (Flank)`,
+      label: `${ALCHEMY_LABELS[spec.alchemy.auxiliary]} (Flank −)`,
       hasIcon: true,
       renderIcon: () => <AlchemyGlyph symbol={spec.alchemy.auxiliary} size={14} stroke="#111315" strokeWidth={1.5} />,
     },
@@ -243,9 +248,9 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
           : `${sub.polygons.tertiarySides}-gon`;
       const subAngle = Math.round((spec.compoundAxisDeg + (idx * 360) / spec.subSigils.length) % 360);
       return {
-        label: `${sub.word}: ${ALCHEMY_LABELS[sub.alchemy.primary]} (${sub.polygons.sides}-gon · ${subL2} · ${subL3} · ${subAngle}°)`,
+        label: `${sub.word}: ${ELEMENT_LABELS[sub.elements.primary]} (${sub.polygons.sides}-gon · ${subL2} · ${subL3} · ${subAngle}°)`,
         hasIcon: true,
-        renderIcon: () => <AlchemyGlyph symbol={sub.alchemy.primary} size={14} stroke="#111315" strokeWidth={1.5} />,
+        renderIcon: () => <ElementGlyph element={sub.elements.primary} size={13} stroke="#111315" strokeWidth={1.45} />,
       };
     });
     subLayout = layoutFlowBadges(subItems, left, y, right);
@@ -300,14 +305,26 @@ export function renderExportLegendGroup(spec: SigilSpec): RenderedExportLegend {
         fontSize={10}
         fill="#4B4F56"
       >
-        {`Root ${spec.profile.digitRoot} (Sum ${spec.profile.gematriaSum}) · ${hashHex}`}
+        {`Root ${spec.profile.digitRoot} (Sum ${spec.profile.gematriaSum}) · ${hashHex}${
+          spec.profile.modifier ? ` · Seed ${spec.profile.modifier}` : ''
+        }`}
       </text>
       <text
         x={right}
-        y={titleStartY + 17}
+        y={titleStartY + 16}
         textAnchor="end"
         fontFamily={monoFont}
         fontSize={10}
+        fill="#1D4ED8"
+      >
+        {spec.category.summary}
+      </text>
+      <text
+        x={right}
+        y={titleStartY + 32}
+        textAnchor="end"
+        fontFamily={monoFont}
+        fontSize={9.5}
         fill="#767A82"
       >
         {rightSummaryLine}

@@ -95,7 +95,8 @@ export const ManualTuningPanel: React.FC<ManualTuningPanelProps> = ({
       : -1
     : -1;
   const activeCore = safeCoreIdx >= 0 ? spec.subSigils[safeCoreIdx] : spec;
-  const primaryWord = spec.text.trim().split(/\s+/).filter(Boolean)[0] ?? 'Main';
+  const primaryWord =
+    (spec.profile.baseText || spec.text).trim().split(/\s+/).filter(Boolean)[0] ?? 'Main';
   const activeCoreWord = safeCoreIdx >= 0 ? spec.subSigils[safeCoreIdx].word : primaryWord;
 
   const updateCoreOverride = <K extends keyof ManualOverrides>(
@@ -570,60 +571,88 @@ export const ManualTuningPanel: React.FC<ManualTuningPanelProps> = ({
       {/* Alchemical & Bindu Core */}
       <section className="space-y-3 pb-5 border-b border-[#E2DFD7]">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-[#4B4F56]">
-          Alchemical & Bindu Core
+          Bindu Core & Flanking Alchemy
         </h3>
+        {safeCoreIdx >= 0 && (
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium text-[#111315]">
+              Satellite Bindu Element ({activeCoreWord})
+            </span>
+            <div className="grid grid-cols-2 gap-1.5">
+              {ALL_ELEMENTS.map((el: ElementType) => (
+                <button
+                  key={`sub-el-${el}`}
+                  type="button"
+                  onClick={() => updateCoreOverride('elementPrimary', el)}
+                  className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded border transition-colors cursor-pointer ${
+                    activeCore.elements.primary === el
+                      ? 'border-[#1D4ED8] bg-[#F1EFE9] text-[#111315] font-semibold'
+                      : 'border-[#E2DFD7] bg-[#FFFFFF] text-[#4B4F56]'
+                  }`}
+                >
+                  <svg width="14" height="14" viewBox="-12 -12 24 24" aria-hidden="true">
+                    <ElementGlyph element={el} size={18} stroke="#111315" strokeWidth={1.6} />
+                  </svg>
+                  <span>{ELEMENT_LABELS[el]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <Slider15Deg
           id="alchemy-rot-slider"
           label="Core Compass Rotation"
           value={activeCore.alchemy.rotationDeg}
           onChange={(v) => updateCoreOverride('alchemyRotationDeg', v)}
         />
-        <div className="space-y-1.5">
-          <span className="block text-xs font-medium text-[#111315]">Primary Core Emblem</span>
-          <div className="grid grid-cols-2 gap-1.5">
-            {ALL_ALCHEMY_SYMBOLS.map((sym: AlchemySymbolId) => (
-              <button
-                key={`alc-p-${sym}`}
-                type="button"
-                onClick={() => updateCoreOverride('alchemyPrimary', sym)}
-                className={`flex items-center gap-2 px-2.5 py-1.5 text-xs rounded border text-left transition-colors cursor-pointer ${
-                  activeCore.alchemy.primary === sym
-                    ? 'border-[#1D4ED8] bg-[#F1EFE9] text-[#111315] font-semibold'
-                    : 'border-[#E2DFD7] bg-[#FFFFFF] text-[#4B4F56] hover:text-[#111315]'
-                }`}
-              >
-                <svg width="16" height="16" viewBox="-16 -16 32 32" aria-hidden="true">
-                  <AlchemyGlyph symbol={sym} size={24} stroke="#111315" strokeWidth={1.8} />
-                </svg>
-                <span className="truncate">{ALCHEMY_LABELS[sym]}</span>
-              </button>
-            ))}
-          </div>
-        </div>
         {safeCoreIdx < 0 && (
-          <div className="space-y-1.5">
-            <label htmlFor="aux-alchemy" className="block text-xs font-medium text-[#111315]">
-              Flanking Auxiliary Emblem
-            </label>
-            <select
-              id="aux-alchemy"
-              value={activeCore.alchemy.auxiliary}
-              onChange={(e) => updateCoreOverride('alchemyAuxiliary', e.target.value as AlchemySymbolId)}
-              className="w-full px-2.5 py-1.5 text-xs bg-[#FFFFFF] border border-[#E2DFD7] rounded text-[#111315] focus:outline-none focus:border-[#1D4ED8]"
-            >
-              {ALL_ALCHEMY_SYMBOLS.map((sym) => (
-                <option key={sym} value={sym}>
-                  {ALCHEMY_LABELS[sym]}
-                </option>
-              ))}
-            </select>
-          </div>
+          <>
+            <div className="space-y-1.5">
+              <span className="block text-xs font-medium text-[#111315]">Primary Flanking Node (0°)</span>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ALL_ALCHEMY_SYMBOLS.map((sym: AlchemySymbolId) => (
+                  <button
+                    key={`alc-p-${sym}`}
+                    type="button"
+                    onClick={() => updateCoreOverride('alchemyPrimary', sym)}
+                    className={`flex items-center gap-2 px-2.5 py-1.5 text-xs rounded border text-left transition-colors cursor-pointer ${
+                      activeCore.alchemy.primary === sym
+                        ? 'border-[#1D4ED8] bg-[#F1EFE9] text-[#111315] font-semibold'
+                        : 'border-[#E2DFD7] bg-[#FFFFFF] text-[#4B4F56] hover:text-[#111315]'
+                    }`}
+                  >
+                    <svg width="16" height="16" viewBox="-16 -16 32 32" aria-hidden="true">
+                      <AlchemyGlyph symbol={sym} size={24} stroke="#111315" strokeWidth={1.8} />
+                    </svg>
+                    <span className="truncate">{ALCHEMY_LABELS[sym]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="aux-alchemy" className="block text-xs font-medium text-[#111315]">
+                Opposing Flanking Node (180°)
+              </label>
+              <select
+                id="aux-alchemy"
+                value={activeCore.alchemy.auxiliary}
+                onChange={(e) => updateCoreOverride('alchemyAuxiliary', e.target.value as AlchemySymbolId)}
+                className="w-full px-2.5 py-1.5 text-xs bg-[#FFFFFF] border border-[#E2DFD7] rounded text-[#111315] focus:outline-none focus:border-[#1D4ED8]"
+              >
+                {ALL_ALCHEMY_SYMBOLS.map((sym) => (
+                  <option key={sym} value={sym}>
+                    {ALCHEMY_LABELS[sym]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
         )}
       </section>
 
       {safeCoreIdx >= 0 ? (
         <p className="text-xs leading-relaxed text-[#4B4F56]">
-          Satellite sub-sigils render Layer 03 (Sacred Geometry & Yantra Core) and the central Layer 06 (Bindu Core) emblem. Select{' '}
+          Satellite sub-sigils render Layer 03 (Sacred Geometry & Yantra Core) and the central Layer 06 (Elemental Bindu Core) emblem. Select{' '}
           <button
             type="button"
             onClick={() => setSelectedCoreIdx(-1)}
@@ -648,7 +677,7 @@ export const ManualTuningPanel: React.FC<ManualTuningPanelProps> = ({
             />
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <span className="block text-xs font-medium text-[#111315]">Primary Element</span>
+                <span className="block text-xs font-medium text-[#111315]">Primary Element (Core)</span>
                 <div className="grid grid-cols-2 gap-1.5">
                   {ALL_ELEMENTS.map((el: ElementType) => (
                     <button

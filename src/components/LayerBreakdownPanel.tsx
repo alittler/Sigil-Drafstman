@@ -81,7 +81,7 @@ const LAYER_META: LayerMeta[] = [
     order: '05',
     name: 'Classical Elements',
     summary: (s) =>
-      `${ELEMENT_LABELS[s.elements.primary]} / ${ELEMENT_LABELS[s.elements.secondary]} · ${s.elements.quadrantCount} poles · ${s.elements.rotationDeg}°`,
+      `${ELEMENT_LABELS[s.elements.primary]} (Core) / ${ELEMENT_LABELS[s.elements.secondary]} · ${s.elements.quadrantCount} poles · ${s.elements.rotationDeg}°`,
     derivation: (s) => s.notes.elements,
   },
   {
@@ -89,7 +89,7 @@ const LAYER_META: LayerMeta[] = [
     order: '06',
     name: 'Alchemical & Bindu Core',
     summary: (s) =>
-      `${ALCHEMY_LABELS[s.alchemy.primary]} · ${ALCHEMY_LABELS[s.alchemy.auxiliary]} · ${s.alchemy.rotationDeg}°${
+      `${ELEMENT_LABELS[s.elements.primary]} core · ${ALCHEMY_LABELS[s.alchemy.primary]} / ${ALCHEMY_LABELS[s.alchemy.auxiliary]} · ${s.alchemy.rotationDeg}°${
         s.subSigils.length >= 1 ? ` + ${s.subSigils.length} satellite${s.subSigils.length === 1 ? '' : 's'}` : ''
       }`,
     derivation: (s) => s.notes.alchemy,
@@ -109,12 +109,16 @@ export const LayerBreakdownPanel: React.FC<LayerBreakdownPanelProps> = ({
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between pb-3 border-b border-[#E2DFD7]">
+      <div className="flex items-start justify-between gap-2 pb-3 border-b border-[#E2DFD7]">
         <div>
           <h2 className="text-sm font-semibold text-[#111315]">Layer Anatomy & Derivation</h2>
           <p className="text-xs text-[#4B4F56] mt-0.5">
             Hover any layer to highlight its geometry on the drafting stage.
           </p>
+          <div className="mt-1.5 font-mono text-[11px] text-[#1D4ED8]">
+            {spec.category.summary}
+            {spec.profile.modifier ? ` · Seed ${spec.profile.modifier}` : ''}
+          </div>
         </div>
         {hiddenCount > 0 && (
           <button

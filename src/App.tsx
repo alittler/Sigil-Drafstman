@@ -11,6 +11,7 @@ import type {
   DraftingOptions,
   LayerId,
   LayerVisibility,
+  MagicDictionaryMode,
   ManualOverrides,
   SavedSigilRecord,
 } from './types/sigil';
@@ -19,11 +20,14 @@ import {
   DEFAULT_LAYER_VISIBILITY,
   deriveSigilFromText,
 } from './engine/sigilEngine';
+import { getEffectiveDictionarySlug } from './engine/magicDictionary';
 import { loadSavedSigils, persistSavedSigils } from './engine/storage';
 import {
   DEFAULT_SIGIL_PHRASE,
-  parsePhraseFromLocation,
+  generateRandomSeed,
+  parseSigilLocation,
   phraseToPath,
+  sanitizeSeedSegment,
 } from './engine/sigilUrl';
 import { TopBar, type ActiveWorkspaceView } from './components/TopBar';
 import { SigilCanvas } from './components/SigilCanvas';
@@ -31,6 +35,7 @@ import { LayerBreakdownPanel } from './components/LayerBreakdownPanel';
 import { ManualTuningPanel } from './components/ManualTuningPanel';
 import { SavedLibraryPanel } from './components/SavedLibraryPanel';
 import { SymbolGuideView } from './components/SymbolGuideView';
+import { SrdSpellbookView } from './components/SrdSpellbookView';
 import { ExportModal } from './components/ExportModal';
 
 type InspectorTab = 'layers' | 'tune' | 'library';
@@ -41,8 +46,15 @@ export default function App() {
   const [isInspectorCollapsed, setIsInspectorCollapsed] = useState(true);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
+  const [initialLocation] = useState(() => parseSigilLocation());
+  const [personalSeed, setPersonalSeed] = useState<string>(
+    () => initialLocation.seed ?? generateRandomSeed()
+  );
+  const [dictionaryMode, setDictionaryMode] = useState<MagicDictionaryMode>(
+    () => initialLocation.dictionary ?? 'auto'
+  );
   const [phraseText, setPhraseText] = useState<string>(
-    () => parsePhraseFromLocation() ?? DEFAULT_SIGIL_PHRASE
+    () => initialLocation.phrase ?? DEFAULT_SIGIL_PHRASE
   );
   const [overrides, setOverrides] = useState<ManualOverrides>({});
   const [visibility, setVisibility] = useState<LayerVisibility>({ ...DEFAULT_LAYER_VISIBILITY });
@@ -62,31 +74,47 @@ export default function App() {
     persistSavedSigils(savedRecords);
   }, [savedRecords]);
 
+  const derivedSpec = useMemo(
+    () =>
+      deriveSigilFromText(
+        phraseText,
+        sanitizeSeedSegment(personalSeed) || null,
+        dictionaryMode
+      ),
+    [phraseText, personalSeed, dictionaryMode]
+  );
+  const effectiveSpec = useMemo(
+    () => applyManualOverrides(derivedSpec, overrides),
+    [derivedSpec, overrides]
+  );
+  const effectiveDictSlug = useMemo(
+    () => getEffectiveDictionarySlug(dictionaryMode, effectiveSpec.category),
+    [dictionaryMode, effectiveSpec.category]
+  );
+
   useEffect(() => {
-    const targetPath = phraseToPath(phraseText);
+    const activeSeed = sanitizeSeedSegment(personalSeed) || null;
+    const targetPath = phraseToPath(phraseText, activeSeed, effectiveDictSlug);
     if (window.location.pathname !== targetPath) {
       window.history.replaceState(null, '', targetPath);
     }
     const trimmed = phraseText.trim();
     document.title = trimmed
-      ? `${trimmed} — Sigil Draftsman`
+      ? `${trimmed}${activeSeed ? ` (${activeSeed}/${effectiveDictSlug})` : ''} — Sigil Draftsman`
       : 'Sigil Draftsman — Deterministic Arcane Sigil Translator';
-  }, [phraseText]);
+  }, [phraseText, personalSeed, effectiveDictSlug]);
 
   useEffect(() => {
     const handlePopState = () => {
-      const fromUrl = parsePhraseFromLocation();
-      setPhraseText(fromUrl ?? DEFAULT_SIGIL_PHRASE);
+      const parsed = parseSigilLocation();
+      const nextSeed = parsed.seed ?? generateRandomSeed();
+      setPersonalSeed(nextSeed);
+      setDictionaryMode(parsed.dictionary ?? 'auto');
+      setPhraseText(parsed.phrase ?? DEFAULT_SIGIL_PHRASE);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-
-  const derivedSpec = useMemo(() => deriveSigilFromText(phraseText), [phraseText]);
-  const effectiveSpec = useMemo(
-    () => applyManualOverrides(derivedSpec, overrides),
-    [derivedSpec, overrides]
-  );
 
   const handleToggleLayer = (layer: LayerId) => {
     setVisibility((prev) => ({ ...prev, [layer]: !prev[layer] }));
@@ -161,6 +189,8 @@ export default function App() {
       title,
       notes,
       text: phraseText,
+      seed: sanitizeSeedSegment(personalSeed) || undefined,
+      dictionary: dictionaryMode,
       overrides: { ...overrides },
       visibility: { ...visibility },
       strokeWeight: draftingOptions.strokeWeight,
@@ -175,16 +205,42 @@ export default function App() {
     handleSaveRecord(title, '');
   };
 
-  const handleNavigatePhrase = (nextPhrase: string) => {
-    const targetPath = phraseToPath(nextPhrase);
+  const handleNavigatePhrase = (
+    nextPhrase: string,
+    nextSeed: string = personalSeed,
+    nextDictionary: MagicDictionaryMode = dictionaryMode
+  ) => {
+    const cleanSeed = sanitizeSeedSegment(nextSeed) || generateRandomSeed();
+    const nextDerived = deriveSigilFromText(nextPhrase, cleanSeed, nextDictionary);
+    const nextSlug = getEffectiveDictionarySlug(nextDictionary, nextDerived.category);
+    const targetPath = phraseToPath(nextPhrase, cleanSeed, nextSlug);
     if (window.location.pathname !== targetPath) {
       window.history.pushState(null, '', targetPath);
     }
+    setPersonalSeed(cleanSeed);
+    setDictionaryMode(nextDictionary);
     setPhraseText(nextPhrase);
   };
 
+  const handleSeedChange = (nextSeed: string) => {
+    setPersonalSeed(sanitizeSeedSegment(nextSeed));
+  };
+
+  const handleRandomizeSeed = () => {
+    const nextSeed = generateRandomSeed();
+    const targetPath = phraseToPath(phraseText, nextSeed, effectiveDictSlug);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+    }
+    setPersonalSeed(nextSeed);
+  };
+
   const handleLoadRecord = (record: SavedSigilRecord) => {
-    handleNavigatePhrase(record.text);
+    handleNavigatePhrase(
+      record.text,
+      record.seed ?? personalSeed,
+      record.dictionary ?? dictionaryMode
+    );
     setOverrides({ ...record.overrides });
     setVisibility({ ...(record.visibility ?? DEFAULT_LAYER_VISIBILITY) });
     setDraftingOptions((prev) => ({
@@ -223,8 +279,20 @@ export default function App() {
           {/* Left / Center Stage */}
           <SigilCanvas
             text={phraseText}
+            seed={personalSeed}
+            dictionaryMode={dictionaryMode}
+            effectiveDictionary={effectiveDictSlug}
             onTextChange={setPhraseText}
-            onSelectSample={handleNavigatePhrase}
+            onSeedChange={handleSeedChange}
+            onDictionaryChange={setDictionaryMode}
+            onRandomizeSeed={handleRandomizeSeed}
+            onSelectSample={(sample) =>
+              handleNavigatePhrase(
+                sample,
+                personalSeed,
+                dictionaryMode === 'srd' ? 'auto' : dictionaryMode
+              )
+            }
             spec={effectiveSpec}
             visibility={visibility}
             draftingOptions={draftingOptions}
@@ -405,6 +473,7 @@ export default function App() {
                     <SavedLibraryPanel
                       records={savedRecords}
                       currentText={phraseText}
+                      currentSeed={personalSeed}
                       onSaveCurrent={handleSaveRecord}
                       onLoadRecord={handleLoadRecord}
                       onDuplicateRecord={handleDuplicateRecord}
@@ -441,11 +510,26 @@ export default function App() {
           <SavedLibraryPanel
             records={savedRecords}
             currentText={phraseText}
+            currentSeed={personalSeed}
             onSaveCurrent={handleSaveRecord}
             onLoadRecord={handleLoadRecord}
             onDuplicateRecord={handleDuplicateRecord}
             onDeleteRecord={handleDeleteRecord}
             layout="full"
+          />
+        </main>
+      )}
+
+      {activeView === 'spellbook' && (
+        <main className="flex-1">
+          <SrdSpellbookView
+            currentText={phraseText}
+            currentSeed={personalSeed}
+            onSelectSpell={(spellName) => {
+              handleNavigatePhrase(spellName, personalSeed, 'srd');
+              setActiveView('workbench');
+            }}
+            onBackToWorkbench={() => setActiveView('workbench')}
           />
         </main>
       )}
@@ -461,6 +545,7 @@ export default function App() {
         onClose={() => setIsExportOpen(false)}
         svgRef={svgRef}
         phrase={phraseText}
+        dictionary={effectiveDictSlug}
         spec={effectiveSpec}
         showSeedOfLife={draftingOptions.showSeedOfLife}
         showBounding={visibility.bounding}
